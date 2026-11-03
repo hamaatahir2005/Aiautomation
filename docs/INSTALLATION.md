@@ -21,3 +21,11 @@ Local data: `%APPDATA%/AI Company OS/data/company.db`, uploads and exports in ad
 - Video failed: verify that the input is playable and unencrypted, install the video requirements for source development, and check the local `exports/video-ID.log`. First transcription requires model download access. Sorani accuracy requires owner review.
 - Scheduled tasks wait while the application is closed. Opening the application resumes due work after owner unlock; there is no Windows background service.
 - Password forgotten: there is no remote password reset. Back up data before an intentional local reset. Protect the Windows user account and disk with OS access controls and BitLocker.
+
+## Database migrations
+
+The backend applies schema version 1 on first launch and records it in `schema_migrations`. `backend/migrations/001_initial.sql` is the reviewable initial SQLite schema. Do not manually rerun it on an existing database. Future schema changes must add a new versioned migration and preserve the existing owner, consent ledger and delivery states. SQLite/PostgreSQL data migration is not automatic in this release.
+
+## Optional official social publishing
+
+Connect your Mastodon server's HTTPS origin and your own access token in Settings. Use a token with `write:statuses` permission and account verification access. Create and review Marketing content, choose a publish time, and approve the exact content. The app must remain running and unlocked. Provider responses supply the actual post ID/URL; failed or interrupted publication is marked for owner review and is not blindly retried. Other social networks are not connected by this adapter.

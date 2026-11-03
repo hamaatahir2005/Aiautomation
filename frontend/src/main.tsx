@@ -80,7 +80,8 @@ function App() {
     [salesKind, setSalesKind] = useState("deal"),
     [revision, setRevision] = useState(0),
     [chart, setChart] = useState<Row[]>([]),
-    [setupStep, setSetupStep] = useState(0);
+    [setupStep, setSetupStep] = useState(0),
+    [notifications, setNotifications] = useState<Row[]>([]);
   const act = async (fn: () => Promise<any>, message = "Saved") => {
     setBusy(true);
     setError("");
@@ -111,6 +112,7 @@ function App() {
     setJobs(j);
     setContacts(c);
     setCampaigns(ca);
+    setNotifications(await api("GET", "/notifications"));
   };
   useEffect(() => {
     refresh().catch((e) => setError(e.message));
@@ -120,6 +122,8 @@ function App() {
   useEffect(() => {
     setForm({});
     setSearch("");
+  }, [page]);
+  useEffect(() => {
     if (auth?.unlocked) {
       const kind =
         page === "Lead research"
@@ -144,6 +148,10 @@ function App() {
           .then(setChart)
           .catch(() => {});
       if (page === "Email campaigns")
+        api("GET", "/gmail/status")
+          .then(setGmail)
+          .catch(() => {});
+      if (page === "Email campaigns")
         api("GET", "/records/reply")
           .then(setReplies)
           .catch(() => {});
@@ -157,6 +165,30 @@ function App() {
           .catch(() => {});
     }
   }, [page, auth?.unlocked, stats.completed_tasks, revision, salesKind]);
+  useEffect(() => {
+    if (!auth?.unlocked) return;
+    const kind =
+      page === "Marketing"
+        ? "marketing"
+        : page === "Support"
+          ? "support"
+          : page === "Sales"
+            ? salesKind
+            : page === "Finance"
+              ? "transaction"
+              : page === "Lead research"
+                ? "lead"
+                : null;
+    if (!kind) return;
+    const timer = setInterval(
+      () =>
+        api("GET", "/records/" + kind)
+          .then(setRecords)
+          .catch(() => {}),
+      5000,
+    );
+    return () => clearInterval(timer);
+  }, [page, salesKind, auth?.unlocked]);
   const value = (key: string, v: any) => setForm((f) => ({ ...f, [key]: v }));
   const field = (
     key: string,
@@ -558,6 +590,19 @@ function App() {
           )}
           {page === "Overview" && (
             <>
+              {notifications.length > 0 && (
+                <section className="panel pad">
+                  <h2>Needs your attention · {notifications.length}</h2>
+                  {notifications.slice(0, 5).map((n) => (
+                    <div className="record" key={n.id}>
+                      <b>{n.title}</b>
+                      <small>
+                        {n.type} · {n.created}
+                      </small>
+                    </div>
+                  ))}
+                </section>
+              )}
               <div className="metrics">
                 {metrics.map(([label, v, Icon, sub]: any) => (
                   <motion.div
@@ -634,10 +679,12 @@ function App() {
                       style={{
                         height: Math.max(
                           4,
-                          Math.min(
-                            120,
-                            (stats.finance?.USD?.revenue_minor || 0) / 100,
-                          ),
+                          (65 * (stats.finance?.USD?.revenue_minor || 0)) /
+                            Math.max(
+                              1,
+                              stats.finance?.USD?.revenue_minor || 0,
+                              stats.finance?.USD?.expense_minor || 0,
+                            ),
                         ),
                       }}
                     />
@@ -645,10 +692,12 @@ function App() {
                       style={{
                         height: Math.max(
                           4,
-                          Math.min(
-                            120,
-                            (stats.finance?.USD?.expense_minor || 0) / 100,
-                          ),
+                          (65 * (stats.finance?.USD?.expense_minor || 0)) /
+                            Math.max(
+                              1,
+                              stats.finance?.USD?.revenue_minor || 0,
+                              stats.finance?.USD?.expense_minor || 0,
+                            ),
                         ),
                       }}
                     />
@@ -775,7 +824,12 @@ function App() {
                   )}
                 </form>
                 {jobList(
-                  jobs.filter((j) => j.department === selected).slice(0, 5),
+                  jobs
+                    .filter(
+                      (j) =>
+                        selected === "AI Manager" || j.department === selected,
+                    )
+                    .slice(0, 10),
                 )}
               </section>
             </div>
@@ -1351,6 +1405,35 @@ function App() {
                     <span className="badge">{r.data.classification}</span>
                     <small>{r.data.sender}</small>
                     <p dir="auto">{r.data.text}</p>
+                    <label>
+                      Reviewed response
+                      <textarea
+                        value={form["reply_" + r.id] || ""}
+                        onChange={(e) => value("reply_" + r.id, e.target.value)}
+                        placeholder="Review or paste an AI draft here before sending."
+                      />
+                    </label>
+                    <button
+                      disabled={!form["reply_" + r.id]}
+                      onClick={() => {
+                        if (
+                          confirm(
+                            "Approve and send this exact response to the customer?",
+                          )
+                        )
+                          act(
+                            () =>
+                              api("POST", `/gmail/replies/${r.id}/send`, {
+                                subject: "Re: " + r.data.subject,
+                                body: form["reply_" + r.id],
+                                approved: true,
+                              }),
+                            "Approved response sent",
+                          );
+                      }}
+                    >
+                      Approve & send response
+                    </button>
                     <button
                       onClick={() =>
                         act(
@@ -1379,6 +1462,26 @@ function App() {
                       <span className="badge">{c.status}</span>
                     </div>
                     <h3>{c.subject}</h3>
+                    <button
+                      onClick={() =>
+                        act(async () => {
+                          const totals = await api(
+                            "GET",
+                            `/campaigns/${c.id}/finance`,
+                          );
+                          alert(
+                            ["USD", "IQD"]
+                              .map(
+                                (currency) =>
+                                  `${currency}: revenue ${money(totals[currency].revenue_minor, currency)}, costs ${money(totals[currency].expense_minor, currency)}, net ${money(totals[currency].net_minor, currency)}`,
+                              )
+                              .join("\n"),
+                          );
+                        }, "Campaign finance loaded")
+                      }
+                    >
+                      Recorded campaign revenue & costs
+                    </button>
                     <pre>{c.body}</pre>
                     <small>
                       Scheduled: {new Date(c.scheduled).toLocaleString()} ·{" "}
@@ -1580,6 +1683,54 @@ function App() {
                     <b>{r.data.title}</b>
                     <span className="badge">{r.data.status}</span>
                     <p dir="auto">{r.data.detail}</p>
+                    {page === "Marketing" && (
+                      <>
+                        <small>
+                          {r.data.platform_url ||
+                            r.data.publish_at ||
+                            "Local draft; not published"}
+                        </small>
+                        {["draft", "new"].includes(r.data.status) && (
+                          <>
+                            <label>
+                              Publish on authorized Mastodon account
+                              <input
+                                type="datetime-local"
+                                value={form["publish_" + r.id] || ""}
+                                onChange={(e) =>
+                                  value("publish_" + r.id, e.target.value)
+                                }
+                              />
+                            </label>
+                            <button
+                              onClick={() => {
+                                if (
+                                  confirm(
+                                    "Approve this exact content for public publication on your connected Mastodon account?",
+                                  )
+                                )
+                                  act(
+                                    () =>
+                                      api(
+                                        "POST",
+                                        `/marketing/${r.id}/approve`,
+                                        {
+                                          publish_at: new Date(
+                                            form["publish_" + r.id] ||
+                                              Date.now(),
+                                          ).toISOString(),
+                                        },
+                                      ),
+                                    "Publication approved",
+                                  );
+                              }}
+                            >
+                              Approve & schedule post
+                            </button>
+                          </>
+                        )}
+                      </>
+                    )}
                     <small>
                       {r.data.due_date || r.created}
                       {r.data.amount_minor
@@ -1658,6 +1809,10 @@ function App() {
                       description: form.description,
                       evidence: form.evidence,
                       confirmed: !!form.confirmed,
+                      campaign_id: form.campaign_id
+                        ? Number(form.campaign_id)
+                        : null,
+                      category: form.cost_category || "other",
                     }),
                   )}
                 >
@@ -1687,6 +1842,35 @@ function App() {
                     {field("amount", "Amount", "number")}
                     {field("description", "Description")}
                     {field("evidence", "Payment / receipt reference")}
+                    <label>
+                      Campaign (optional)
+                      <select
+                        onChange={(e) => value("campaign_id", e.target.value)}
+                      >
+                        <option value="">General business</option>
+                        {campaigns.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Category
+                      <select
+                        onChange={(e) => value("cost_category", e.target.value)}
+                      >
+                        {[
+                          "other",
+                          "customer payment",
+                          "API cost",
+                          "video processing",
+                          "operations",
+                        ].map((c) => (
+                          <option key={c}>{c}</option>
+                        ))}
+                      </select>
+                    </label>
                   </div>
                   <label className="checkbox">
                     <input
@@ -1918,9 +2102,39 @@ function App() {
                     {d}
                   </label>
                 ))}
+                <h2>Official social integration · Mastodon</h2>
+                <p className="muted">
+                  Connect an access token from your Mastodon server with
+                  write:statuses permission. Posts require approval in
+                  Marketing. Other platforms require their own official
+                  adapters.
+                </p>
+                <form
+                  onSubmit={submit(() =>
+                    api("POST", "/settings/mastodon", {
+                      base_url: form.mastodon_url,
+                      access_token: form.mastodon_token,
+                    }),
+                  )}
+                >
+                  {field(
+                    "mastodon_url",
+                    "Mastodon server",
+                    "url",
+                    "https://mastodon.social",
+                  )}
+                  {field(
+                    "mastodon_token",
+                    "Authorized access token",
+                    "password",
+                  )}
+                  <button disabled={busy}>
+                    Verify & save social connection
+                  </button>
+                </form>
                 <h2>Revoke credentials</h2>
                 <div className="actions">
-                  {["ai", "search"].map((n) => (
+                  {["ai", "search", "mastodon"].map((n) => (
                     <button
                       key={n}
                       onClick={() =>

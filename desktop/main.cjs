@@ -3,9 +3,9 @@ const { spawn } = require("node:child_process");
 const { randomBytes } = require("node:crypto");
 const path = require("node:path");
 const fs = require("node:fs/promises");
-const {openAsBlob,createWriteStream}=require("node:fs");
-const {Readable}=require("node:stream");
-const {pipeline}=require("node:stream/promises");
+const { openAsBlob, createWriteStream } = require("node:fs");
+const { Readable } = require("node:stream");
+const { pipeline } = require("node:stream/promises");
 const net = require("node:net");
 protocol.registerSchemesAsPrivileged([
   {
@@ -21,7 +21,7 @@ protocol.registerSchemesAsPrivileged([
 let backend, win, port, token;
 const base = () => `http://127.0.0.1:${port}`;
 const allowed =
-  /^\/(health|auth|contacts|export|gmail|campaigns|jobs|media|exports|settings|finance|records|invoices|stats|plans|videos|permissions|music|analytics)(\/[^?#]*)?(\?[^#]*)?$/;
+  /^\/(health|auth|contacts|export|gmail|campaigns|jobs|media|exports|settings|finance|records|invoices|stats|plans|videos|permissions|music|analytics|marketing|notifications)(\/[^?#]*)?(\?[^#]*)?$/;
 function senderOK(event) {
   if (!win || event.sender !== win.webContents) throw Error("Unknown sender");
 }
@@ -182,7 +182,7 @@ app.whenReady().then(async () => {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!r.ok) throw Error("Output unavailable");
-    await pipeline(Readable.fromWeb(r.body),createWriteStream(save.filePath));
+    await pipeline(Readable.fromWeb(r.body), createWriteStream(save.filePath));
     return true;
   });
   ipcMain.handle("invoice", async (event, id) => {
@@ -238,7 +238,7 @@ app.whenReady().then(async () => {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!r.ok) throw Error("Export failed");
-    await pipeline(Readable.fromWeb(r.body),createWriteStream(save.filePath));
+    await pipeline(Readable.fromWeb(r.body), createWriteStream(save.filePath));
     return true;
   });
   protocol.handle("aios-media", async (request) => {

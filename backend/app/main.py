@@ -20,6 +20,7 @@ from .services import (
     save_setting,
     audit,
     execute,
+    publish_marketing,
     smtp_connect,
     send_email,
     get_secret,
@@ -49,6 +50,18 @@ def worker():
         try:
             if not unlocked:
                 continue
+            if "Marketing Agent" in setting("agent_permissions", DEPARTMENTS):
+                with Session() as scheduled_session:
+                    content = [
+                        r.id
+                        for r in scheduled_session.scalars(
+                            select(Record).where(Record.kind == "marketing")
+                        )
+                        if json.loads(r.payload).get("status") == "approved"
+                        and json.loads(r.payload).get("publish_at", "9999") <= now()
+                    ]
+                for record_id in content:
+                    publish_marketing(record_id)
             with Session() as s:
                 job = s.scalar(
                     select(Job).where(Job.status == "queued").order_by(Job.id)
@@ -169,6 +182,12 @@ async def lifespan(app):
         for j in s.scalars(select(Job).where(Job.status == "running")):
             j.status = "failed"
             j.result = "Application interrupted; retry explicitly."
+        for content in s.scalars(select(Record).where(Record.kind == "marketing")):
+            payload = json.loads(content.payload)
+            if payload.get("status") == "publishing":
+                payload["status"] = "needs review"
+                payload["error_type"] = "Application interrupted during publication"
+                content.payload = json.dumps(payload)
         for d in s.scalars(select(Delivery).where(Delivery.status == "sending")):
             d.status = "uncertain"
             d.error = "Interrupted after send began; check Gmail before retrying."
@@ -475,6 +494,7 @@ def gmail_status():
     return {
         "address": setting("gmail", {}).get("address"),
         "connected": bool(get_secret("gmail")),
+        "imap_enabled": setting("imap", {}).get("enabled", False),
     }
 
 
@@ -765,7 +785,7 @@ def settings():
 
 
 @app.delete("/settings/credentials/{name}")
-def revoke(name: Literal["gmail", "ai", "search"]):
+def revoke(name: Literal["gmail", "ai", "search", "mastodon"]):
     delete_secret(name)
     audit("credential_revoked", {"name": name})
     return {"ok": True}
@@ -773,6 +793,10 @@ def revoke(name: Literal["gmail", "ai", "search"]):
 
 # Typed operational records. Monetary values are integer minor units, never binary floats.
 class TransactionInput(BaseModel):
+    campaign_id: int | None = None
+    category: Literal[
+        "customer payment", "API cost", "video processing", "operations", "other"
+    ] = "other"
     direction: Literal["revenue", "expense"]
     amount_minor: int = Field(gt=0, le=10**14)
     currency: Literal["USD", "IQD"]
@@ -785,6 +809,10 @@ class TransactionInput(BaseModel):
 def finance(body: TransactionInput):
     if not body.confirmed:
         raise HTTPException(422, "Record confirmed transactions only")
+    if body.campaign_id:
+        with Session() as s:
+            if not s.get(Campaign, body.campaign_id):
+                raise HTTPException(422, "Campaign does not exist")
     return add_record("transaction", body.model_dump())
 
 
@@ -920,6 +948,7 @@ def approve_plan(jid: int, body: PlanApproval):
                 Job(
                     department=task["department"],
                     objective=str(task["objective"])[:20000],
+                    options=json.dumps({"manager_job_id": jid}),
                 )
             )
         s.add_all(selected)
@@ -1221,3 +1250,170 @@ def analytics(start: str = "", end: str = ""):
                     "amount_minor"
                 ]
     return list(points.values())
+
+
+class MastodonInput(BaseModel):
+    base_url: str
+    access_token: str = Field(min_length=1, max_length=2000)
+
+
+@app.post("/settings/mastodon")
+def mastodon_settings(body: MastodonInput):
+    from urllib.parse import urlparse
+    import httpx
+
+    url = urlparse(body.base_url)
+    if (
+        url.scheme != "https"
+        or not url.hostname
+        or url.username
+        or url.password
+        or url.query
+        or url.fragment
+        or url.path not in ("", "/")
+    ):
+        raise HTTPException(
+            422, "Use the HTTPS origin of your authorized Mastodon server"
+        )
+    try:
+        result = httpx.get(
+            body.base_url.rstrip("/") + "/api/v1/accounts/verify_credentials",
+            headers={"Authorization": "Bearer " + body.access_token},
+            timeout=30,
+        )
+        result.raise_for_status()
+        account = result.json()
+    except Exception:
+        raise HTTPException(
+            400,
+            "Mastodon authorization failed; verify server and write:statuses permission",
+        )
+    set_secret("mastodon", body.access_token)
+    save_setting(
+        "mastodon", {"base_url": body.base_url.rstrip("/"), "account": account["acct"]}
+    )
+    audit("social_connected", {"platform": "Mastodon"})
+    return {"account": account["acct"]}
+
+
+class PublishApproval(BaseModel):
+    publish_at: str
+
+
+@app.post("/marketing/{rid}/approve")
+def approve_marketing(rid: int, body: PublishApproval):
+    try:
+        moment = datetime.fromisoformat(body.publish_at)
+        if moment.tzinfo is None:
+            raise ValueError()
+    except ValueError:
+        raise HTTPException(422, "Timezone-aware publish time required")
+    if not setting("mastodon", {}).get("base_url") or not get_secret("mastodon"):
+        raise HTTPException(409, "Configure authorized Mastodon access first")
+    with Session.begin() as s:
+        record = s.get(Record, rid)
+        if not record or record.kind != "marketing":
+            raise HTTPException(404)
+        data = json.loads(record.payload)
+        if data.get("status") not in ("draft", "new"):
+            raise HTTPException(409, "Only a draft may be approved for publication")
+        data.update(
+            status="approved",
+            platform="Mastodon",
+            publish_at=moment.astimezone(timezone.utc).isoformat(),
+        )
+        record.payload = json.dumps(data)
+    audit("social_content_approved", {"record": rid})
+    return {"ok": True}
+
+
+@app.get("/notifications")
+def notifications():
+    output = []
+    for kind in ("reminder", "reply", "marketing"):
+        for record in records(kind):
+            d = record["data"]
+            if (
+                (
+                    kind == "reminder"
+                    and d.get("due_date", "9999") <= now()[:10]
+                    and d.get("status") not in ("done", "completed")
+                )
+                or (kind == "reply" and d.get("classification") == "interested")
+                or (kind == "marketing" and d.get("status") == "needs review")
+            ):
+                output.append(
+                    {
+                        "id": record["id"],
+                        "type": kind,
+                        "title": d.get("title") or d.get("subject", "Review required"),
+                        "created": record["created"],
+                    }
+                )
+    return output
+
+
+class ApprovedReplyInput(BaseModel):
+    subject: str = Field(min_length=1, max_length=200, pattern=r"^[^\r\n]+$")
+    body: str = Field(min_length=1, max_length=20000)
+    approved: bool
+
+
+@app.post("/gmail/replies/{rid}/send")
+def send_approved_reply(rid: int, body: ApprovedReplyInput):
+    if not body.approved:
+        raise HTTPException(422, "Human approval required")
+    with Session() as s:
+        record = s.get(Record, rid)
+        if not record or record.kind != "reply":
+            raise HTTPException(404)
+        original = json.loads(record.payload)
+        existing = [
+            r
+            for r in s.scalars(select(Record).where(Record.kind == "sent_reply"))
+            if json.loads(r.payload).get("reply_id") == rid
+        ]
+        if existing:
+            raise HTTPException(
+                409,
+                "A reply was already sent; inspect conversation before another send",
+            )
+    try:
+        send_email(original["sender"], body.subject, body.body)
+    except Exception:
+        raise HTTPException(
+            400, "Reply send failed; verify Gmail Sent Mail before retrying"
+        )
+    add_record(
+        "sent_reply",
+        {
+            "reply_id": rid,
+            "recipient": original["sender"],
+            "subject": body.subject,
+            "body": body.body,
+            "approved": True,
+            "sent_at": now(),
+        },
+    )
+    audit("reply_sent", {"reply_id": rid})
+    return {"ok": True}
+
+
+@app.get("/campaigns/{cid}/finance")
+def campaign_finance(cid: int):
+    with Session() as s:
+        if not s.get(Campaign, cid):
+            raise HTTPException(404)
+    totals = {
+        c: {"revenue_minor": 0, "expense_minor": 0, "net_minor": 0}
+        for c in ("USD", "IQD")
+    }
+    for record in records("transaction"):
+        data = record["data"]
+        if data.get("campaign_id") == cid:
+            totals[data["currency"]][data["direction"] + "_minor"] += data[
+                "amount_minor"
+            ]
+    for value in totals.values():
+        value["net_minor"] = value["revenue_minor"] - value["expense_minor"]
+    return totals

@@ -502,3 +502,123 @@ def test_analytics_filters_and_money(owner):
     assert points[0]["USD_revenue_minor"] == 9876
     assert owner.get("/analytics?start=2025-01-01&end=2026-12-31").status_code == 422
     assert owner.get("/analytics?start=bad").status_code == 422
+
+
+def test_official_social_publication_requires_approval(owner, monkeypatch):
+    import app.services as services
+    from app.services import publish_marketing, save_setting
+
+    save_setting("mastodon", {"base_url": "https://social.example", "account": "owner"})
+    monkeypatch.setattr(services, "get_secret", lambda name: "test-token")
+    monkeypatch.setattr(main, "get_secret", lambda name: "test-token")
+    rid = owner.post(
+        "/records/marketing",
+        json={
+            "title": "Campaign post",
+            "detail": "Owner-approved content",
+            "status": "draft",
+        },
+    ).json()["id"]
+    requests = []
+
+    class Result:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"id": "verified-status-1", "url": "https://social.example/@owner/1"}
+
+    monkeypatch.setattr(
+        services.httpx,
+        "post",
+        lambda *args, **kwargs: requests.append((args, kwargs)) or Result(),
+    )
+    publish_marketing(rid)
+    assert not requests
+    assert (
+        owner.post(
+            f"/marketing/{rid}/approve",
+            json={
+                "publish_at": (
+                    datetime.now(timezone.utc) - timedelta(seconds=1)
+                ).isoformat()
+            },
+        ).status_code
+        == 200
+    )
+    publish_marketing(rid)
+    assert len(requests) == 1
+    assert requests[0][1]["headers"]["Idempotency-Key"] == f"aios-marketing-{rid}"
+    assert owner.get("/records/marketing").json()[0]["data"]["status"] == "published"
+    publish_marketing(rid)
+    assert len(requests) == 1
+
+
+def test_reply_sending_needs_exact_human_approval_and_prevents_duplicate(
+    owner, monkeypatch
+):
+    with Session.begin() as s:
+        reply = Record(
+            kind="reply",
+            payload=json.dumps(
+                {
+                    "sender": "customer@example.com",
+                    "subject": "Customer request",
+                    "text": "Help please",
+                }
+            ),
+        )
+        s.add(reply)
+        s.flush()
+        rid = reply.id
+    sent = []
+    monkeypatch.setattr(main, "send_email", lambda *args: sent.append(args))
+    payload = {
+        "subject": "Re: Customer request",
+        "body": "A reviewed response",
+        "approved": False,
+    }
+    assert owner.post(f"/gmail/replies/{rid}/send", json=payload).status_code == 422
+    assert not sent
+    payload["approved"] = True
+    assert owner.post(f"/gmail/replies/{rid}/send", json=payload).status_code == 200
+    assert len(sent) == 1
+    assert owner.post(f"/gmail/replies/{rid}/send", json=payload).status_code == 409
+
+
+def test_campaign_costs_and_revenue_are_only_linked_recorded_transactions(owner):
+    cid = contact(owner)
+    campaign_id = campaign(owner, cid).json()["id"]
+    assert (
+        owner.get(f"/campaigns/{campaign_id}/finance").json()["USD"]["revenue_minor"]
+        == 0
+    )
+    owner.post(
+        "/finance",
+        json={
+            "direction": "revenue",
+            "amount_minor": 10000,
+            "currency": "USD",
+            "description": "Customer payment",
+            "evidence": "receipt",
+            "confirmed": True,
+            "campaign_id": campaign_id,
+        },
+    )
+    owner.post(
+        "/finance",
+        json={
+            "direction": "expense",
+            "amount_minor": 1500,
+            "currency": "USD",
+            "description": "API cost",
+            "evidence": "usage invoice",
+            "confirmed": True,
+            "campaign_id": campaign_id,
+            "category": "API cost",
+        },
+    )
+    assert (
+        owner.get(f"/campaigns/{campaign_id}/finance").json()["USD"]["net_minor"]
+        == 8500
+    )

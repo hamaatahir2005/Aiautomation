@@ -453,3 +453,53 @@ def manager_plan(objective):
         ):
             raise ValueError("Invalid task")
     return json.dumps(plan, ensure_ascii=False)
+
+
+def publish_marketing(record_id):
+    from .db import now
+
+    config = setting("mastodon", {})
+    secret = get_secret("mastodon")
+    if not config.get("base_url") or not secret:
+        with Session.begin() as s:
+            record = s.get(Record, record_id)
+            if record:
+                data = json.loads(record.payload)
+                data["status"] = "needs review"
+                data["error_type"] = "Mastodon credential unavailable"
+                record.payload = json.dumps(data)
+        return
+    with Session.begin() as s:
+        record = s.get(Record, record_id)
+        if not record or record.kind != "marketing":
+            return
+        data = json.loads(record.payload)
+        if data.get("status") != "approved" or data.get("publish_at", "9999") > now():
+            return
+        data["status"] = "publishing"
+        record.payload = json.dumps(data)
+    try:
+        response = httpx.post(
+            config["base_url"].rstrip("/") + "/api/v1/statuses",
+            headers={
+                "Authorization": "Bearer " + secret,
+                "Idempotency-Key": f"aios-marketing-{record_id}",
+            },
+            json={"status": data["detail"], "visibility": "public"},
+            timeout=60,
+        )
+        response.raise_for_status()
+        result = response.json()
+        data["status"] = "published"
+        data["published_at"] = now()
+        data["platform_id"] = str(result["id"])
+        data["platform_url"] = result.get("url", "")
+    except Exception as exc:
+        data["status"] = "needs review"
+        data["error_type"] = type(exc).__name__
+    with Session.begin() as s:
+        s.get(Record, record_id).payload = json.dumps(data)
+    audit(
+        "social_publish_attempt",
+        {"record": record_id, "status": data["status"], "platform": "Mastodon"},
+    )
