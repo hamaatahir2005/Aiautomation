@@ -15,10 +15,5 @@ $installer = Start-Process release/AI-Company-OS-Setup.exe -ArgumentList '/S' -P
 if ($installer.ExitCode -ne 0) { throw 'Silent installation failed' }
 $exe = Join-Path $env:LOCALAPPDATA 'Programs/AI Company OS/AI Company OS.exe'
 if (!(Test-Path $exe)) { throw "Installed application missing at $exe" }
-$desktop = Start-Process $exe -PassThru
-try {
-  Start-Sleep -Seconds 20
-  $desktop.Refresh()
-  if ($desktop.HasExited) { throw 'Desktop exited during startup' }
-  if ($desktop.MainWindowHandle -eq 0) { throw 'Desktop did not create a window' }
-} finally { Stop-Process -Id $desktop.Id -ErrorAction SilentlyContinue }
+node scripts/desktop-smoke.cjs
+if ($LASTEXITCODE -ne 0) { throw 'Installed desktop UI acceptance failed' }

@@ -27,6 +27,14 @@ jobs:
       - name: Verify packaged backend and desktop launch
         shell: pwsh
         run: ./scripts/smoke-windows.ps1
+      - name: Capture diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build-diagnostics
+          path: |
+            build/pyinstaller/aios-backend/warn-aios-backend.txt
+            release/evidence/
       - name: Installer checksum
         shell: pwsh
         run: (Get-FileHash release/AI-Company-OS-Setup.exe -Algorithm SHA256).Hash | Out-File release/SHA256.txt
@@ -36,5 +44,6 @@ jobs:
           path: |
             release/AI-Company-OS-Setup.exe
             release/SHA256.txt
+            release/evidence/
           if-no-files-found: error
           retention-days: 30
