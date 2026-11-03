@@ -1,0 +1,13 @@
+node_modules/
+dist/
+release/
+build/
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.db
+*.sqlite*
+.env
+data/
+*.spec

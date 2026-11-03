@@ -1,0 +1,9 @@
+# Security model
+
+Renderer: sandboxed, no Node integration, context isolation, denied navigation/popups/permissions and content security policy. A narrow preload bridge permits local API calls, system file dialogs and output saving. The session bearer token remains in the main process and backend environment, never the renderer. Backend binds loopback on a random available port, validates host/origin and authenticates every route. Local owner password is scrypt hashed with a random salt. Rate limiting caps requests; this is a single-owner desktop application.
+
+Gmail App Passwords and provider keys use the Windows WinVault backend explicitly; non-Windows secret writes fail closed. No plaintext secret fallback is provided. Credentials are never returned in API responses or logged. Revoke in Settings or through Windows Credential Manager. Data files themselves are not encrypted; use OS disk encryption to protect a stolen disk. Local malware running as the owner is outside this application's security boundary.
+
+Agents produce drafts and cannot execute arbitrary shell commands or independently send emails. Only explicitly approved campaigns can send, and each recipient's permission is rechecked at delivery. No public-lead-to-campaign auto-enrollment exists. Global daily cap, pacing, pause on send errors and conservative crash recovery avoid blind retransmission. Unsubscribe-by-reply requires inbox monitoring/manual processing before further sends. App must remain open and unlocked to operate scheduled work.
+
+CSV/XLSX exports neutralize formula prefixes. Uploads use random internal names, allowed extensions, bounded sizes and fixed export paths. FFmpeg uses argument arrays without a shell. Malformed media is still untrusted: keep dependency patches current. This is not a multi-user hosted service.

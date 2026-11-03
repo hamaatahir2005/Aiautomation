@@ -1,0 +1,40 @@
+name: Windows installer
+on:
+  push:
+    branches: [main, "codex/**"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Build and test Windows installer
+        shell: pwsh
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: ./scripts/build-windows.ps1
+      - name: Verify packaged backend and desktop launch
+        shell: pwsh
+        run: ./scripts/smoke-windows.ps1
+      - name: Installer checksum
+        shell: pwsh
+        run: (Get-FileHash release/AI-Company-OS-Setup.exe -Algorithm SHA256).Hash | Out-File release/SHA256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AI-Company-OS-Windows-x64
+          path: |
+            release/AI-Company-OS-Setup.exe
+            release/SHA256.txt
+          if-no-files-found: error
+          retention-days: 30
