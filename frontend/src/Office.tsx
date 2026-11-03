@@ -1,8 +1,13 @@
-import {Suspense,useRef,useState} from 'react';
+import {Suspense,useRef,useState,useMemo,useEffect} from 'react';
 import {Canvas,useFrame,ThreeEvent} from '@react-three/fiber';
-import {OrbitControls,Grid,ContactShadows,Float,Html} from '@react-three/drei';
+import {OrbitControls,Grid,ContactShadows,Float} from '@react-three/drei';
 import * as THREE from 'three';
 export const departments=['AI Manager','Video Editor','Worldwide Lead Finder','Gmail Email Agent','Sales Agent','Marketing Agent','Customer Support','Finance Agent','Analytics Agent','Operations Agent'];
+function OfficeLabel({name,active,position}:{name:string,active:boolean,position:[number,number,number]}){
+ const texture=useMemo(()=>{const canvas=document.createElement('canvas');canvas.width=640;canvas.height=96;const ctx=canvas.getContext('2d')!;ctx.fillStyle='#101d30ee';ctx.fillRect(0,0,640,96);ctx.strokeStyle=active?'#55d9b4':'#3a526f';ctx.lineWidth=4;ctx.strokeRect(2,2,636,92);ctx.fillStyle=active?'#55f3c1':'#bdd2e9';ctx.font='500 34px Segoe UI, sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(name,320,48);const tex=new THREE.CanvasTexture(canvas);tex.colorSpace=THREE.SRGBColorSpace;return tex;},[name,active]);
+ useEffect(()=>()=>texture.dispose(),[texture]);
+ return <sprite position={position} scale={[1.85,.278,1]} renderOrder={10}><spriteMaterial map={texture} transparent depthTest={false}/></sprite>;
+}
 function Employee({position,index,active,onSelect}:{position:[number,number,number],index:number,active:boolean,onSelect:(name:string)=>void}){
  const ref=useRef<THREE.Group>(null);const [hover,setHover]=useState(false);
  useFrame(({clock})=>{if(ref.current)ref.current.position.y=.92+Math.sin(clock.elapsedTime*2+index)*.045;});
@@ -20,7 +25,7 @@ function Employee({position,index,active,onSelect}:{position:[number,number,numb
    <mesh position={[0,.32,-.145]}><boxGeometry args={[.23,.075,.07]}/><meshStandardMaterial color="#101b31" emissive={color} emissiveIntensity={.4}/></mesh>
   </group>
   <mesh position={[0,.015,0]} rotation={[-Math.PI/2,0,0]}><ringGeometry args={[.87,.9,48]}/><meshBasicMaterial color={color} transparent opacity={hover?.8:.15}/></mesh>
-  <Html center position={[0,1.65,0]} distanceFactor={10}><button className={'office-label '+(active?'working':'')} onClick={()=>onSelect(departments[index])}><i/>{departments[index]}</button></Html>
+  <OfficeLabel name={departments[index]} active={active} position={[0,1.65,0]}/>
  </group>;
 }
 export default function Office({active,onSelect}:{active:string[],onSelect:(name:string)=>void}){

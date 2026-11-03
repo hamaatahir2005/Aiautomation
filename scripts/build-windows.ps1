@@ -6,7 +6,7 @@ python -m pytest backend/tests -q
 Assert-Exit
 npm ci
 Assert-Exit
-python -m PyInstaller --noconfirm --onedir --name aios-backend --distpath build --workpath build/pyinstaller --paths backend --collect-all imageio_ffmpeg --collect-all faster_whisper --collect-all scenedetect --collect-all ctranslate2 --collect-submodules keyring.backends --hidden-import win32timezone backend/run.py
+python -m PyInstaller --noconfirm --onedir --name aios-backend --distpath build --workpath build/pyinstaller --paths backend --collect-all imageio_ffmpeg --collect-all faster_whisper --collect-all scenedetect --collect-all ctranslate2 --collect-submodules keyring.backends backend/run.py
 Assert-Exit
 if (Test-Path build/backend) { Remove-Item build/backend -Recurse -Force }
 Rename-Item build/aios-backend backend

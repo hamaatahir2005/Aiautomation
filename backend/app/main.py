@@ -43,6 +43,10 @@ def dispatch_one():
             delivery=s.scalar(select(Delivery).where(Delivery.campaign_id==campaign.id,Delivery.status=='queued').order_by(Delivery.id))
             if not delivery:
                 campaign.status='completed';s.commit();continue
+            if setting('imap',{}).get('enabled'):
+                try:sync_inbox();s.expire_all()
+                except HTTPException:
+                    campaign.status='paused';s.commit();save_setting('last_email_attempt',now());audit('campaign_paused',{'reason':'Inbox sync failed before sending'});return True
             contact=s.get(Contact,delivery.contact_id)
             if not contact or not contact.consent or contact.unsubscribed or not contact.consent_evidence:
                 delivery.status='suppressed';s.commit();return True
@@ -265,8 +269,11 @@ def jobs():
     with Session() as s:return [columns(j) for j in s.scalars(select(Job).order_by(Job.id.desc()).limit(500))]
 @app.post('/jobs')
 def create_job(body:JobInput):
+    if body.department not in setting('agent_permissions',DEPARTMENTS):raise HTTPException(403,'Department disabled by owner')
     if body.department=='Video Editor':
         opts=body.options
+        music=str(opts.get('music',''))
+        if music and (Path(music).name!=music or not (DATA/'media'/music).is_file() or Path(music).suffix not in ('.mp3','.wav','.m4a')):raise HTTPException(422,'Choose licensed uploaded music')
         name=str(opts.get('file',''))
         if Path(name).name!=name or not (DATA/'media'/name).is_file():raise HTTPException(422,'Select an uploaded video')
         try:
@@ -459,3 +466,54 @@ def edit_subtitles(jid:int,body:SubtitlesInput):
     path=DATA/'exports'/f'video-{jid}.srt';write_srt(path,body.segments)
     (DATA/'exports'/f'video-{jid}.json').write_text(json.dumps(body.segments,ensure_ascii=False),encoding='utf-8')
     return {'file':path.name}
+
+@app.put('/records/{kind}/{rid}')
+def update_operational(kind:Literal['deal','product','invoice','support','marketing','interaction','reminder'],rid:int,body:OperationalInput):
+    with Session.begin() as s:
+        row=s.get(Record,rid)
+        if not row or row.kind!=kind:raise HTTPException(404)
+        row.payload=json.dumps(body.model_dump())
+    audit('record_updated',{'kind':kind,'id':rid});return {'ok':True}
+
+class AgentPermissions(BaseModel): enabled:list[str]=Field(max_length=10)
+@app.get('/permissions')
+def permissions():return {'enabled':setting('agent_permissions',DEPARTMENTS)}
+@app.put('/permissions')
+def update_permissions(body:AgentPermissions):
+    if any(name not in DEPARTMENTS for name in body.enabled):raise HTTPException(422,'Unknown department')
+    save_setting('agent_permissions',body.enabled);audit('agent_permissions_updated',body.model_dump());return body
+
+@app.post('/music')
+async def upload_music(licensed:bool,file:UploadFile=File(...)):
+    if not licensed:raise HTTPException(422,'Confirm you own or have a license for this music')
+    suffix=Path(file.filename or '').suffix.lower()
+    if suffix not in ('.mp3','.wav','.m4a'):raise HTTPException(422,'Use MP3, WAV or M4A')
+    data=await file.read(100_000_001)
+    if len(data)>100_000_000:raise HTTPException(413,'100 MB maximum')
+    folder=DATA/'media';folder.mkdir(exist_ok=True);name=secrets.token_hex(16)+suffix;(folder/name).write_bytes(data)
+    audit('licensed_music_import',{'file':name,'owner_confirmed_license':True});return {'file':name}
+
+@app.get('/analytics')
+def analytics(start:str='',end:str=''):
+    from datetime import date,timedelta
+    try:
+        first=date.fromisoformat(start) if start else datetime.now(timezone.utc).date()-timedelta(days=29)
+        last=date.fromisoformat(end) if end else datetime.now(timezone.utc).date()
+        if first>last or (last-first).days>366:raise ValueError()
+    except ValueError:raise HTTPException(422,'Choose a valid date range of at most 367 days')
+    points={};d=first
+    while d<=last:
+        points[d.isoformat()]={'date':d.isoformat(),'tasks':0,'videos':0,'leads':0,'emails':0,'USD_revenue_minor':0,'USD_expense_minor':0,'IQD_revenue_minor':0,'IQD_expense_minor':0};d+=timedelta(days=1)
+    with Session() as s:
+        for job in s.scalars(select(Job).where(Job.status=='completed',Job.created>=first.isoformat(),Job.created<(last+timedelta(days=1)).isoformat())):
+            point=points.get(job.created[:10])
+            if point is not None:point['tasks']+=1;point['videos']+=int(job.department=='Video Editor')
+        for delivery in s.scalars(select(Delivery).where(Delivery.status=='sent',Delivery.timestamp>=first.isoformat(),Delivery.timestamp<(last+timedelta(days=1)).isoformat())):
+            if delivery.timestamp[:10] in points:points[delivery.timestamp[:10]]['emails']+=1
+        for record in s.scalars(select(Record).where(Record.kind.in_(['lead','transaction']),Record.created>=first.isoformat(),Record.created<(last+timedelta(days=1)).isoformat())):
+            point=points.get(record.created[:10])
+            if point is None:continue
+            if record.kind=='lead':point['leads']+=1
+            else:
+                value=json.loads(record.payload);point[value['currency']+'_'+value['direction']+'_minor']+=value['amount_minor']
+    return list(points.values())

@@ -1,7 +1,72 @@
 {
- "name":"ai-company-os","version":"0.1.0","private":true,"description":"AI Company OS Ultimate Edition","author":"AI Company OS","main":"desktop/main.cjs",
- "scripts":{"dev":"vite --config frontend/vite.config.ts","build":"tsc -p frontend && vite build --config frontend/vite.config.ts","desktop":"electron .","package:win":"npm run build && electron-builder --win nsis --x64","test":"python -m pytest backend/tests -q"},
- "dependencies":{"react":"^19.1.0","react-dom":"^19.1.0","three":"^0.177.0","@react-three/fiber":"^9.1.2","@react-three/drei":"^10.0.8","framer-motion":"^12.12.1","lucide-react":"^0.511.0"},
- "devDependencies":{"@types/react":"^19.1.4","@types/react-dom":"^19.1.5","@types/three":"^0.177.0","@vitejs/plugin-react":"^4.4.1","typescript":"^5.8.3","vite":"^6.3.5","electron":"^36.2.1","electron-builder":"^26.0.12","tailwindcss":"^4.1.7","@tailwindcss/vite":"^4.1.7"},
- "build":{"appId":"com.aicompany.os","productName":"AI Company OS","directories":{"output":"release"},"files":["dist/**/*","desktop/**/*","package.json"],"extraResources":[{"from":"build/backend","to":"backend"}],"win":{"target":[{"target":"nsis","arch":["x64"]}],"artifactName":"AI-Company-OS-Setup.exe"},"nsis":{"oneClick":false,"allowToChangeInstallationDirectory":true,"createDesktopShortcut":true}}
+  "name": "ai-company-os",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI Company OS Ultimate Edition",
+  "author": "AI Company OS",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "dev": "vite --config frontend/vite.config.ts",
+    "build": "tsc -p frontend && vite build --config frontend/vite.config.ts",
+    "desktop": "electron .",
+    "package:win": "npm run build && electron-builder --win nsis --x64 --publish never",
+    "test": "python -m pytest backend/tests -q",
+    "test:ui": "node scripts/ui-smoke.cjs"
+  },
+  "dependencies": {
+    "@react-three/drei": "^10.0.8",
+    "@react-three/fiber": "^9.1.2",
+    "framer-motion": "^12.12.1",
+    "lucide-react": "^0.511.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "three": "^0.177.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.7",
+    "@types/react": "^19.1.4",
+    "@types/react-dom": "^19.1.5",
+    "@types/three": "^0.177.0",
+    "@vitejs/plugin-react": "^4.4.1",
+    "electron": "^36.2.1",
+    "electron-builder": "^26.0.12",
+    "playwright": "^1.56.1",
+    "tailwindcss": "^4.1.7",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  },
+  "build": {
+    "appId": "com.aicompany.os",
+    "productName": "AI Company OS",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "desktop/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/backend",
+        "to": "backend"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "AI-Company-OS-Setup.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    }
+  }
 }

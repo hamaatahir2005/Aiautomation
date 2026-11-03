@@ -99,6 +99,10 @@ def video(job):
         filters += f",select='{expression}',setpts=N/FRAME_RATE/TB"
         audio=f"aselect='{expression}',asetpts=N/SR/TB,"+audio
     command = [ffmpeg(),'-y','-ss',str(start),'-i',str(source),'-t',str(duration),'-vf',filters,'-af',audio,'-c:v','libx264','-preset','ultrafast','-crf','23','-c:a','aac','-movflags','+faststart','-progress','pipe:1','-nostats',str(output)]
+    if opts.get('music'):
+        music=DATA/'media'/opts['music']
+        # Music is explicitly owner-licensed; mix at a conservative background level.
+        command=[ffmpeg(),'-y','-ss',str(start),'-i',str(source),'-stream_loop','-1','-i',str(music),'-t',str(duration),'-vf',filters,'-filter_complex',f'[0:a]{audio}[voice];[1:a]volume=0.12[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[mix]','-map','0:v:0','-map','[mix]','-c:v','libx264','-preset','ultrafast','-crf','23','-c:a','aac','-movflags','+faststart','-progress','pipe:1','-nostats',str(output)]
     with (outdir / f'video-{job.id}.log').open('w') as log:
         proc = subprocess.Popen(command,stdout=subprocess.PIPE,stderr=log,text=True,cwd=outdir)
         for line in proc.stdout:
@@ -123,12 +127,21 @@ def research(options):
         for item in response.json().get('web',{}).get('results',[]):
             if item['url'] in existing: continue
             lead = {'name':item['title'],'website':item['url'],'source_url':item['url'],'description':item.get('description',''),'country':options.get('country',''),'industry':options.get('industry',''),'research_date':now(),'relevance_score':None,'verification':'search result; owner review required','contact_channels':[]}
+            if setting('ai',{}).get('model'):
+                try:
+                    scored=ai('Return JSON only: {"score":integer 0 to 100,"reason":"brief reasoning"}. Assess relevance for '+query+' using ONLY this search evidence: '+json.dumps(lead),'Worldwide Lead Finder').strip()
+                    if scored.startswith('```'):scored=scored.split('\n',1)[1].rsplit('```',1)[0]
+                    scored=json.loads(scored);score=scored['score']
+                    if isinstance(score,int) and 0<=score<=100:lead['relevance_score']=score;lead['relevance_reason']=str(scored.get('reason',''))[:1000]
+                except Exception:lead['relevance_status']='AI scoring unavailable; review source manually'
             s.add(Record(kind='lead',payload=json.dumps(lead))); results.append(lead); existing.add(item['url'])
     return json.dumps(results)
 
 def execute(job_id):
     with Session() as s: job = s.get(Job,job_id)
     if job.status != 'queued': return
+    if job.department not in setting('agent_permissions',['AI Manager','Video Editor','Worldwide Lead Finder','Gmail Email Agent','Sales Agent','Marketing Agent','Customer Support','Finance Agent','Analytics Agent','Operations Agent']):
+        update_job(job.id,status='paused',result='Department disabled by owner');return
     with Session.begin() as s:
         from sqlalchemy import update
         if s.execute(update(Job).where(Job.id==job_id,Job.status=='queued').values(status='running',progress=1)).rowcount!=1:return
@@ -138,7 +151,11 @@ def execute(job_id):
         if state not in ('cancelled','paused'): update_job(job.id,status='completed',progress=100,result=result or '')
     except Exception as exc:
         # Deliberately exclude provider responses, authentication details and raw exception text.
-        update_job(job.id,status='failed',result=f'{type(exc).__name__}: processing failed. Check configured dependencies and provider access.')
+        reason=f'{type(exc).__name__}: processing failed. Check configured dependencies and provider access.'
+        if isinstance(exc,ModuleNotFoundError):reason=f'Missing dependency: {exc.name}. Install the video requirements or use a complete Windows build.'
+        elif isinstance(exc,httpx.HTTPStatusError):reason=f'Provider returned HTTP {exc.response.status_code}. Verify credentials, model, quota and endpoint.'
+        elif isinstance(exc,RuntimeError) and str(exc) in ('Configure an AI model in Settings','Configure Brave Search API key in Settings','Input video missing','FFmpeg failed; inspect local export log'):reason=str(exc)
+        update_job(job.id,status='failed',result=reason)
         audit('job_failed',{'id':job.id,'error_type':type(exc).__name__})
 
 

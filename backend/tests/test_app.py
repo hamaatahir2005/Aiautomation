@@ -124,3 +124,53 @@ def test_smtp_tls_and_gmail_secret_not_in_db(owner,monkeypatch):
     assert r.status_code==200
     with Session() as s:assert all('1234567890123456' not in r.payload for r in s.scalars(select(Record)))
     assert saved['gmail']=='1234567890123456'
+
+def test_manager_plan_requires_human_approval_and_valid_tasks(owner,monkeypatch):
+    import app.services as services
+    monkeypatch.setattr(services,'ai',lambda *args:json.dumps({'summary':'Launch service','tasks':[{'department':'Sales Agent','objective':'Draft a quote'},{'department':'Marketing Agent','objective':'Draft Sorani captions'}]}))
+    jid=owner.post('/jobs',json={'department':'AI Manager','objective':'Launch a digital service'}).json()['id']
+    execute(jid)
+    assert len(owner.get('/jobs').json())==1
+    assert owner.post(f'/plans/{jid}/approve',json={'task_indices':[0,1]}).json()['delegated']==2
+    assert len(owner.get('/jobs').json())==3
+    assert owner.post(f'/plans/{jid}/approve',json={'task_indices':[0]}).status_code==409
+
+def test_permissions_and_pacing_survive_restart(owner,monkeypatch):
+    assert owner.put('/permissions',json={'enabled':['Sales Agent']}).status_code==200
+    assert owner.post('/jobs',json={'department':'Marketing Agent','objective':'Disabled'}).status_code==403
+    assert owner.post('/jobs',json={'department':'Sales Agent','objective':'Allowed'}).status_code==200
+    cid=contact(owner);campaign_id=campaign(owner,cid).json()['id'];owner.post(f'/campaigns/{campaign_id}/approve')
+    sent=[];monkeypatch.setattr(main,'send_email',lambda *args:sent.append(args))
+    assert main.dispatch_one();engine.dispose()
+    cid2=contact(owner,'next@example.com');c2=campaign(owner,cid2).json()['id'];owner.post(f'/campaigns/{c2}/approve')
+    assert not main.dispatch_one();assert len(sent)==1
+
+def test_subtitle_edit_validation_and_invoice_escaping(owner):
+    with Session.begin() as s:
+        job=Job(department='Video Editor',objective='existing export',status='completed',result='{}');s.add(job);s.flush();jid=job.id
+    (DATA/'exports').mkdir(exist_ok=True)
+    assert owner.put(f'/videos/{jid}/subtitles',json={'segments':[{'start':0,'end':1.2,'text':'سڵاو hello'}]}).status_code==200
+    srt=owner.get(f'/exports/video-{jid}.srt');assert '00:00:01,200' in srt.text;assert 'سڵاو' in srt.text
+    assert owner.put(f'/videos/{jid}/subtitles',json={'segments':[{'start':5,'end':2,'text':'bad'}]}).status_code==422
+    rid=owner.post('/records/invoice',json={'title':'<script>alert(1)</script>','detail':'Service','amount_minor':12345,'currency':'USD'}).json()['id']
+    html=owner.get(f'/invoices/{rid}/print').text
+    assert '<script>' not in html;assert '123.45 USD' in html
+
+def test_research_deduplicates_keeps_sources_and_never_creates_contacts(owner,monkeypatch):
+    import app.services as services
+    monkeypatch.setattr(services,'get_secret',lambda name:'test-search-key')
+    class Result:
+        def raise_for_status(self):pass
+        def json(self):return {'web':{'results':[{'url':'https://business.example/about','title':'Example business','description':'Public business listing'}]}}
+    monkeypatch.setattr(services.httpx,'get',lambda *a,**kw:Result())
+    options={'country':'Iraq','industry':'Retail'}
+    assert len(json.loads(services.research(options)))==1
+    assert json.loads(services.research(options))==[]
+    lead=owner.get('/records/lead').json()[0]['data']
+    assert lead['source_url']=='https://business.example/about';assert lead['research_date']
+    assert owner.get('/contacts').json()==[]
+
+def test_music_requires_explicit_license(owner):
+    assert owner.post('/music?licensed=false',files={'file':('music.mp3',b'123','audio/mpeg')}).status_code==422
+    assert owner.post('/music?licensed=true',files={'file':('music.mp3',b'123','audio/mpeg')}).status_code==200
+    assert owner.post('/gmail/sync').status_code==403
