@@ -134,9 +134,17 @@ def video(job):
         segments, info = model.transcribe(
             str(source), language=opts.get("language") or None, vad_filter=True
         )
-        transcript = [
-            {"start": s.start, "end": s.end, "text": s.text} for s in segments
-        ]
+        for segment in segments:
+            with Session() as session:
+                if session.get(Job, job.id).status == "cancelled":
+                    return None
+            transcript.append(
+                {"start": segment.start, "end": segment.end, "text": segment.text}
+            )
+            update_job(
+                job.id,
+                progress=min(19, 1 + int(segment.end / max(info.duration, 1) * 18)),
+            )
         (outdir / f"video-{job.id}.json").write_text(
             json.dumps(transcript, ensure_ascii=False), encoding="utf-8"
         )
@@ -313,49 +321,50 @@ def research(options):
     from .db import now
 
     results = []
-    with Session.begin() as s:
+    with Session() as s:
         existing = {
             json.loads(r.payload).get("source_url")
             for r in s.scalars(select(Record).where(Record.kind == "lead"))
         }
-        for item in response.json().get("web", {}).get("results", []):
-            if item["url"] in existing:
-                continue
-            lead = {
-                "name": item["title"],
-                "website": item["url"],
-                "source_url": item["url"],
-                "description": item.get("description", ""),
-                "country": options.get("country", ""),
-                "industry": options.get("industry", ""),
-                "research_date": now(),
-                "relevance_score": None,
-                "verification": "search result; owner review required",
-                "contact_channels": [],
-            }
-            if setting("ai", {}).get("model"):
-                try:
-                    scored = ai(
-                        'Return JSON only: {"score":integer 0 to 100,"reason":"brief reasoning"}. Assess relevance for '
-                        + query
-                        + " using ONLY this search evidence: "
-                        + json.dumps(lead),
-                        "Worldwide Lead Finder",
-                    ).strip()
-                    if scored.startswith("```"):
-                        scored = scored.split("\n", 1)[1].rsplit("```", 1)[0]
-                    scored = json.loads(scored)
-                    score = scored["score"]
-                    if isinstance(score, int) and 0 <= score <= 100:
-                        lead["relevance_score"] = score
-                        lead["relevance_reason"] = str(scored.get("reason", ""))[:1000]
-                except Exception:
-                    lead["relevance_status"] = (
-                        "AI scoring unavailable; review source manually"
-                    )
+    for item in response.json().get("web", {}).get("results", []):
+        if item["url"] in existing:
+            continue
+        lead = {
+            "name": item["title"],
+            "website": item["url"],
+            "source_url": item["url"],
+            "description": item.get("description", ""),
+            "country": options.get("country", ""),
+            "industry": options.get("industry", ""),
+            "research_date": now(),
+            "relevance_score": None,
+            "verification": "search result; owner review required",
+            "contact_channels": [],
+        }
+        if setting("ai", {}).get("model"):
+            try:
+                scored = ai(
+                    'Return JSON only: {"score":integer 0 to 100,"reason":"brief reasoning"}. Assess relevance for '
+                    + query
+                    + " using ONLY this search evidence: "
+                    + json.dumps(lead),
+                    "Worldwide Lead Finder",
+                ).strip()
+                if scored.startswith("```"):
+                    scored = scored.split("\n", 1)[1].rsplit("```", 1)[0]
+                scored = json.loads(scored)
+                score = scored["score"]
+                if isinstance(score, int) and 0 <= score <= 100:
+                    lead["relevance_score"] = score
+                    lead["relevance_reason"] = str(scored.get("reason", ""))[:1000]
+            except Exception:
+                lead["relevance_status"] = (
+                    "AI scoring unavailable; review source manually"
+                )
+        with Session.begin() as s:
             s.add(Record(kind="lead", payload=json.dumps(lead)))
-            results.append(lead)
-            existing.add(item["url"])
+        results.append(lead)
+        existing.add(item["url"])
     return json.dumps(results)
 
 
@@ -408,6 +417,9 @@ def execute(job_id):
         if state not in ("cancelled", "paused"):
             update_job(job.id, status="completed", progress=100, result=result or "")
     except Exception as exc:
+        with Session() as current_session:
+            if current_session.get(Job, job.id).status in ("cancelled", "paused"):
+                return
         # Deliberately exclude provider responses, authentication details and raw exception text.
         reason = f"{type(exc).__name__}: processing failed. Check configured dependencies and provider access."
         if isinstance(exc, ModuleNotFoundError):
