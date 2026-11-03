@@ -22,3 +22,13 @@ This is an implemented desktop development release, not a claim that every produ
 Local checks: **19 passed, 1 Windows-only test skipped**; TypeScript/Vite build passed; Chromium UI smoke passed. Windows WinVault and installed-app acceptance passed on the Windows runner for commit 7950b18; the final workflow must also pass for the additional social and response workflows.
 
 Known scope: optional PostgreSQL/Redis are not configured, social platforms beyond the Mastodon adapter are not connected, asynchronous work stops when the application closes, no code-signing certificate is supplied, and no live Gmail/AI/search credential was supplied. All external activity and revenue counts originate in stored application events; SMTP acceptance indicates server acceptance, not proof of delivery or sales.
+
+## Verified Windows build
+
+- Application source commit: `49e6a1c8710bb8be2733b08f9974b2a2f1341a62`.
+- Successful Windows runner: https://github.com/hamaatahir2005/Aiautomation/actions/runs/41612864782 .
+- **20 backend/integration tests passed on Windows**, including actual Windows Credential Manager roundtrip and real FFmpeg MP4 production.
+- Installed desktop acceptance passed using the actual Electron preload: owner setup, interactive WebGL office, customer creation, application restart and customer persistence.
+- Installer artifact: https://github.com/hamaatahir2005/Aiautomation/actions/runs/41612864782/artifacts/13219459065 .
+- Installer SHA256: `8C474099634631FFD883605DDD05BD237F36573B875EA68210492C8A7CB7C925`.
+- Live Gmail, AI, Brave Search and Mastodon calls remain unverified because no owner credentials were supplied. Model transcription/accuracy still requires downloaded speech weights and language-specific review.
